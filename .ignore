@@ -1,0 +1,66 @@
+# Build artifacts
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test/coverage
+*.test
+coverage.out
+coverage.html
+coverage.txt
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor
+/vendor/
+
+# SQLite temp files
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Secrets / session artifacts
+*.env
+.env
+.env.local
+*.token
+*.cookie
+*.session
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# OpenCode agent internals (not project code)
+.agents/
+skills-lock.json
+.opencode/
+
+# Local OpenCode data (read-only, not project source)
+~/.local/share/opencode/
+~/.config/octa/

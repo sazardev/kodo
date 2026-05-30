@@ -1,0 +1,62 @@
+# Binarios del proyecto
+octa
+octa.exe
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go test binaries
+*.test
+
+# Coverage
+coverage.out
+coverage.html
+coverage.txt
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor (descomentar si se quiere commitear el vendor)
+/vendor/
+
+# Archivos de configuración local (contienen credenciales/sesiones)
+*.env
+.env
+.env.local
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# SQLite WAL/SHM (archivos temporales de la DB local)
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Tokens / Session artifacts (nunca commitear credenciales)
+*.token
+*.cookie
+*.session
