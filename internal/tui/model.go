@@ -15,11 +15,11 @@ type Model struct {
 	loading   bool
 	authMode  string
 	workspace string
-	error     error
+	err       error
 
-	usage   *UsageData
-	models  *ModelData
-	context *ContextData
+	usage   *TUIUsage
+	models  *TUIModels
+	context *TUIContext
 
 	refreshFn func() *ServiceData
 }
@@ -39,12 +39,57 @@ type ServiceSummary struct {
 	Error        error
 }
 
+type TUIUsage struct {
+	Rolling  TUICycle
+	Weekly   TUICycle
+	Monthly  TUICycle
+	LastSync string
+}
+
+type TUICycle struct {
+	Percentage  float64
+	ResetIn     string
+	Trend       string
+	Health      string
+	Critical    bool
+	CriticalMsg string
+	ExhaustDate string
+}
+
+type TUIModels struct {
+	Filter      string
+	Summary     TUIModelSummary
+	TotalTokens string
+}
+
+type TUIModelSummary struct {
+	TopByVolume string
+	TopByCost   string
+	Rows        []TUIModelRow
+}
+
+type TUIModelRow struct {
+	Name              string
+	Calls             int
+	PromptTokens      string
+	CompletionTokens  string
+	CostWeight        string
+}
+
+type TUIContext struct {
+	MaxContext   string
+	AvgPrompt    string
+	AvgResponse  string
+	GrowthChart  []int64
+	Warning      string
+}
+
 func New(refreshFn func() *ServiceData) *Model {
 	return &Model{
 		tab:        0,
 		authMode:   "auto",
 		workspace:  "",
-		refreshFn: refreshFn,
+		refreshFn:  refreshFn,
 	}
 }
 
@@ -57,14 +102,12 @@ func (m *Model) loadData() tea.Msg {
 		return nil
 	}
 	data := m.refreshFn()
-	return DataLoadedMsg(data)
+	return DataLoadedMsg{Data: data}
 }
 
 type DataLoadedMsg struct {
 	Data *ServiceData
 }
-
-type DataLoadingMsg struct{}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -81,27 +124,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.loading = true
 			return m, m.loadData
-		case "m":
-			m.toggleAuthMode()
 		}
 
 	case DataLoadedMsg:
 		m.loading = false
 		m.updateWithData(msg.Data)
-
-	case DataLoadingMsg:
-		m.loading = true
 	}
 
 	return m, nil
-}
-
-func (m *Model) toggleAuthMode() {
-	if m.authMode == "auto" {
-		m.authMode = "manual"
-	} else {
-		m.authMode = "auto"
-	}
 }
 
 func (m *Model) updateWithData(data *ServiceData) {
@@ -111,7 +141,7 @@ func (m *Model) updateWithData(data *ServiceData) {
 
 	m.authMode = data.Summary.AuthMode
 	m.workspace = data.Summary.Workspace
-	m.error = data.Summary.Error
+	m.err = data.Summary.Error
 
 	if data.Usage != nil {
 		m.usage = convertUsage(data.Usage)
@@ -126,11 +156,11 @@ func (m *Model) updateWithData(data *ServiceData) {
 	}
 }
 
-func convertUsage(u *models.WorkspaceUsage) *UsageData {
+func convertUsage(u *models.WorkspaceUsage) *TUIUsage {
 	if u == nil {
 		return nil
 	}
-	return &UsageData{
+	return &TUIUsage{
 		Rolling:  convertCycle(u.Rolling),
 		Weekly:   convertCycle(u.Weekly),
 		Monthly:  convertCycle(u.Monthly),
@@ -138,8 +168,8 @@ func convertUsage(u *models.WorkspaceUsage) *UsageData {
 	}
 }
 
-func convertCycle(c models.UsageData) UsageCycle {
-	cycle := UsageCycle{
+func convertCycle(c models.UsageData) TUICycle {
+	cycle := TUICycle{
 		Percentage: c.Percentage,
 		ResetIn:    formatDuration(c.ResetIn),
 	}
@@ -187,28 +217,28 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d minutes", mins)
 }
 
-func convertModels(s *models.ModelSummary) *ModelData {
+func convertModels(s *models.ModelSummary) *TUIModels {
 	if s == nil {
 		return nil
 	}
 
-	data := &ModelData{
+	data := &TUIModels{
 		Filter: "All Time",
-		Summary: ModelSummary{
+		Summary: TUIModelSummary{
 			TopByVolume: s.TopByVolume,
 			TopByCost:   s.TopByCost,
-			Rows:        make([]ModelRow, 0, len(s.Models)),
+			Rows:        make([]TUIModelRow, 0, len(s.Models)),
 		},
 		TotalTokens: formatTokens(s.TotalPromptTokens + s.TotalCompletionTokens),
 	}
 
 	for _, m := range s.Models {
-		data.Summary.Rows = append(data.Summary.Rows, ModelRow{
-			Name:              m.ModelID,
-			Calls:             m.Calls,
-			PromptTokens:      formatTokens(m.PromptTokens),
-			CompletionTokens:  formatTokens(m.CompletionTokens),
-			CostWeight:        formatCostWeight(m.CostWeight),
+		data.Summary.Rows = append(data.Summary.Rows, TUIModelRow{
+			Name:             m.ModelID,
+			Calls:            m.Calls,
+			PromptTokens:     formatTokens(m.PromptTokens),
+			CompletionTokens: formatTokens(m.CompletionTokens),
+			CostWeight:       formatCostWeight(m.CostWeight),
 		})
 	}
 
@@ -227,16 +257,19 @@ func formatTokens(t int64) string {
 
 func formatCostWeight(w float64) string {
 	filled := int(w / 20)
+	if filled > 5 {
+		filled = 5
+	}
 	empty := 5 - filled
 	return strings.Repeat("★", filled) + strings.Repeat("░", empty)
 }
 
-func convertContext(c *models.ContextStats) *ContextData {
+func convertContext(c *models.ContextStats) *TUIContext {
 	if c == nil {
 		return nil
 	}
 
-	data := &ContextData{
+	data := &TUIContext{
 		MaxContext:  fmt.Sprintf("%d tokens", c.MaxContextRecorded),
 		AvgPrompt:   fmt.Sprintf("%d tokens", c.AveragePromptSize),
 		AvgResponse: fmt.Sprintf("%d tokens", c.AverageResponseSize),
@@ -266,8 +299,8 @@ func (m *Model) View() string {
 
 	footer := renderFooter(m.loading)
 
-	if m.error != nil {
-		content = ErrorBanner(m.error.Error()) + "\n\n" + content
+	if m.err != nil {
+		content = ErrorBanner(m.err.Error()) + "\n\n" + content
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", tabs, content, footer)
@@ -281,7 +314,7 @@ func renderHeader(workspace, authMode string) string {
 
 	if workspace != "" {
 		ws := DimStyle.Render("Workspace: ") + ValueStyle.Render(workspace)
-		right := lipgloss.JoinHorizontal(lipgloss.Bottom, ws, DimStyle.Render(" │ "), DimStyle.Render("Auth: "), ValueStyle.Render(authMode))
+		right := lipgloss.JoinHorizontal(lipgloss.Bottom, ws, DimStyle.Render(" | "), DimStyle.Render("Auth: "), ValueStyle.Render(authMode))
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, DimStyle.Render(strings.Repeat(" ", 30))+right)
 	}
 
@@ -324,11 +357,11 @@ func (m *Model) renderDashboard() string {
 		DimStyle.Render("Last sync: ")+m.usage.LastSync
 }
 
-func (u *UsageData) Render(label string) string {
+func (u *TUIUsage) Render(label string) string {
 	return u.Rolling.Render(label)
 }
 
-func (c *UsageCycle) Render(label string) string {
+func (c *TUICycle) Render(label string) string {
 	bar := renderProgressBar(c.Percentage)
 	line := label + " " + bar + " " + ValueStyle.Render(fmt.Sprintf("%.0f", c.Percentage)) + "%"
 

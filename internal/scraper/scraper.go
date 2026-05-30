@@ -14,9 +14,9 @@ import (
 )
 
 type Scraper struct {
-	client   *http.Client
+	client    *http.Client
 	workspace string
-	cookie   string
+	cookie    string
 }
 
 func NewScraper(workspace, cookie string) *Scraper {
@@ -38,6 +38,7 @@ func (s *Scraper) FetchUsage() (*models.WorkspaceUsage, error) {
 
 	req.Header.Set("Cookie", s.cookie)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -62,16 +63,11 @@ func (s *Scraper) parseUsage(doc *goquery.Document) *models.WorkspaceUsage {
 		LastSync: time.Now(),
 	}
 
-	doc.Find("[class*='usage'], [class*='quota'], [class*='cycle']").Each(func(i int, sel *goquery.Selection) {
-		text := sel.Text()
-		if strings.Contains(text, "rolling") || strings.Contains(text, "Rolling") {
-			usage.Rolling = parseCycle(sel)
-		} else if strings.Contains(text, "week") || strings.Contains(text, "Week") {
-			usage.Weekly = parseCycle(sel)
-		} else if strings.Contains(text, "month") || strings.Contains(text, "Month") {
-			usage.Monthly = parseCycle(sel)
-		}
-	})
+	html := doc.Text()
+
+	usage.Rolling = s.parseCycleFromText(html, models.CycleRolling)
+	usage.Weekly = s.parseCycleFromText(html, models.CycleWeekly)
+	usage.Monthly = s.parseCycleFromText(html, models.CycleMonthly)
 
 	if usage.Rolling.Percentage == 0 {
 		usage.Rolling = s.fallbackCycle(models.CycleRolling)
@@ -86,21 +82,29 @@ func (s *Scraper) parseUsage(doc *goquery.Document) *models.WorkspaceUsage {
 	return usage
 }
 
-func parseCycle(sel *goquery.Selection) models.UsageData {
-	data := models.UsageData{}
+func (s *Scraper) parseCycleFromText(html string, cycle models.CycleType) models.UsageData {
+	data := models.UsageData{
+		Cycle: cycle,
+	}
 
-	sel.Find("span, div, p").Each(func(i int, s *goquery.Selection) {
-		text := s.Text()
-		if strings.Contains(text, "%") {
-			if pct := extractPercentage(text); pct > 0 {
-				data.Percentage = pct
-			}
+	cycleLabels := map[models.CycleType][]string{
+		models.CycleRolling: {"rolling", "Rolling", "24h", "last 24 hours"},
+		models.CycleWeekly:  {"week", "Week", "weekly", "7 day"},
+		models.CycleMonthly: {"month", "Month", "monthly", "30 day"},
+	}
+
+	labels := cycleLabels[cycle]
+
+	for _, label := range labels {
+		percentage := s.extractPercentageNearLabel(html, label)
+		if percentage > 0 {
+			data.Percentage = percentage
+			break
 		}
-		if strings.Contains(text, "day") || strings.Contains(text, "hour") || strings.Contains(text, "min") {
-			data.ResetIn = extractDuration(text)
-			data.ElapsedHours = estimateElapsedHours(data.ResetIn)
-		}
-	})
+	}
+
+	data.ResetIn = s.extractResetTime(html, labels)
+	data.ElapsedHours = estimateElapsedHours(data.ResetIn, cycle)
 
 	data.Velocity = calculateVelocity(data.Percentage, data.ElapsedHours)
 	data.TimeToExhaust = calculateTimeToExhaust(data.Percentage, data.Velocity)
@@ -109,33 +113,66 @@ func parseCycle(sel *goquery.Selection) models.UsageData {
 	return data
 }
 
-func (s *Scraper) fallbackCycle(cycle models.CycleType) models.UsageData {
-	var resetIn time.Duration
-	var elapsedHours float64
-
-	switch cycle {
-	case models.CycleRolling:
-		resetIn = 24 * time.Hour
-		elapsedHours = 1
-	case models.CycleWeekly:
-		resetIn = 7 * 24 * time.Hour
-		elapsedHours = 24
-	case models.CycleMonthly:
-		resetIn = 30 * 24 * time.Hour
-		elapsedHours = 72
+func (s *Scraper) extractPercentageNearLabel(html, label string) float64 {
+	idx := strings.Index(strings.ToLower(html), strings.ToLower(label))
+	if idx == -1 {
+		return 0
 	}
 
-	return models.UsageData{
-		Cycle:        cycle,
-		Percentage:   0,
-		ResetIn:      resetIn,
-		ElapsedHours: elapsedHours,
-		Velocity:     0,
-		Health:       models.HealthGreen,
+	contextLength := 200
+	start := idx - contextLength
+	if start < 0 {
+		start = 0
 	}
+	end := idx + len(label) + contextLength
+	if end > len(html) {
+		end = len(html)
+	}
+
+	context := html[start:end]
+
+	percentRegex := regexp.MustCompile(`(\d+(?:\.\d+)?)\s*%`)
+	matches := percentRegex.FindAllStringSubmatch(context, -1)
+
+	for i := len(matches) - 1; i >= 0; i-- {
+		if pct, err := strconv.ParseFloat(matches[i][1], 64); err == nil {
+			if pct <= 100 {
+				return pct
+			}
+		}
+	}
+
+	return 0
 }
 
-var percentRegex = regexp.MustCompile(`(\d+(?:\.\d+)?)`)
+func (s *Scraper) extractResetTime(html string, labels []string) time.Duration {
+	for _, label := range labels {
+		idx := strings.Index(strings.ToLower(html), strings.ToLower(label))
+		if idx == -1 {
+			continue
+		}
+
+		contextLength := 300
+		start := idx - contextLength
+		if start < 0 {
+			start = 0
+		}
+		end := idx + len(label) + contextLength
+		if end > len(html) {
+			end = len(html)
+		}
+
+		context := html[start:end]
+
+		if reset := extractDuration(context); reset > 0 {
+			return reset
+		}
+	}
+
+	return 24 * time.Hour
+}
+
+var percentRegex = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*%`)
 
 func extractPercentage(text string) float64 {
 	matches := percentRegex.FindStringSubmatch(text)
@@ -146,7 +183,7 @@ func extractPercentage(text string) float64 {
 	return 0
 }
 
-var durationRegex = regexp.MustCompile(`(\d+)\s*(day|hour|min|hr)`)
+var durationRegex = regexp.MustCompile(`(\d+)\s*(day|d|hour|hr|h|minute|min|m)`)
 
 func extractDuration(text string) time.Duration {
 	matches := durationRegex.FindAllStringSubmatch(text, -1)
@@ -154,31 +191,32 @@ func extractDuration(text string) time.Duration {
 
 	for _, m := range matches {
 		val, _ := strconv.Atoi(m[1])
-		switch m[2] {
-		case "day":
+		unit := strings.ToLower(m[2])
+		switch {
+		case strings.HasPrefix(unit, "day") || unit == "d":
 			total += time.Duration(val) * 24 * time.Hour
-		case "hour", "hr":
+		case strings.HasPrefix(unit, "hour") || strings.HasPrefix(unit, "hr") || unit == "h":
 			total += time.Duration(val) * time.Hour
-		case "min":
+		case strings.HasPrefix(unit, "min") || unit == "m":
 			total += time.Duration(val) * time.Minute
 		}
-	}
-
-	if total == 0 {
-		total = 24 * time.Hour
 	}
 
 	return total
 }
 
-func estimateElapsedHours(resetIn time.Duration) float64 {
-	switch {
-	case resetIn <= 24*time.Hour:
-		return 1
-	case resetIn <= 7*24*time.Hour:
-		return 24
+func estimateElapsedHours(resetIn time.Duration, cycle models.CycleType) float64 {
+	resetHours := resetIn.Hours()
+
+	switch cycle {
+	case models.CycleRolling:
+		return resetHours - 2
+	case models.CycleWeekly:
+		return resetHours - 6
+	case models.CycleMonthly:
+		return resetHours - 24
 	default:
-		return 72
+		return resetHours / 2
 	}
 }
 
@@ -208,25 +246,52 @@ func determineHealth(data models.UsageData) models.HealthStatus {
 	return models.HealthGreen
 }
 
+func (s *Scraper) fallbackCycle(cycle models.CycleType) models.UsageData {
+	var resetIn time.Duration
+
+	switch cycle {
+	case models.CycleRolling:
+		resetIn = 24 * time.Hour
+	case models.CycleWeekly:
+		resetIn = 7 * 24 * time.Hour
+	case models.CycleMonthly:
+		resetIn = 30 * 24 * time.Hour
+	}
+
+	return models.UsageData{
+		Cycle:      cycle,
+		Percentage: 0,
+		ResetIn:    resetIn,
+		Health:     models.HealthGreen,
+	}
+}
+
 func ValidateWorkspaceURL(rawURL string) (string, error) {
+	if rawURL == "" {
+		return "", fmt.Errorf("URL cannot be empty")
+	}
+
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
 
-	if u.Host != "opencode.ai" && !strings.Contains(u.Host, "opencode.ai") {
-		return "", fmt.Errorf("invalid workspace URL")
+	host := strings.ToLower(u.Host)
+	if !strings.Contains(host, "opencode.ai") {
+		return "", fmt.Errorf("invalid workspace URL: not opencode.ai")
 	}
 
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	path := strings.Trim(u.Path, "/")
+	parts := strings.Split(path, "/")
+
 	for i, part := range parts {
 		if part == "workspace" && i+1 < len(parts) {
 			return parts[i+1], nil
 		}
 	}
 
-	if len(parts) >= 2 && parts[0] == "" {
-		return parts[1], nil
+	if len(parts) >= 1 && parts[0] != "" {
+		return parts[0], nil
 	}
 
 	return "", fmt.Errorf("workspace ID not found in URL")
