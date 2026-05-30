@@ -1,4 +1,4 @@
-# OCTA
+# kodo
 
 **OpenCode Telemetry and Analytics TUI** — Your Go subscription, visualized in the terminal.
 
@@ -12,7 +12,7 @@
 
 ## What is this?
 
-OCTA is a terminal dashboard that extracts, analyzes, and forecasts your **OpenCode Go subscription** consumption — directly from your terminal, no public API required.
+kodo is a terminal dashboard that extracts, analyzes, and forecasts your **OpenCode Go subscription** consumption — directly from your terminal, no public API required.
 
 It combines **web scraping** (via local browser cookies) with **local telemetry mining** (SQLite databases) to give you operational awareness, token forecasting, and cost modeling.
 
@@ -37,18 +37,18 @@ It combines **web scraping** (via local browser cookies) with **local telemetry 
 
 ```bash
 # Clone
-git clone https://github.com/youruser/octa.git && cd octa
+git clone https://github.com/youruser/kodo.git && cd kodo
 
 # Build
-go build -o octa .
+go build -o kodo .
 
 # Run
-./octa
+./kodo
 ```
 
 ## Authentication
 
-OCTA supports two modes:
+kodo supports two modes:
 
 - **Automatic** — Reads session cookies from your local browsers (Chrome, Firefox, Edge, Brave, Safari)
 - **Manual** — Paste your session cookie or load from `~/.config/octa/config.json`
